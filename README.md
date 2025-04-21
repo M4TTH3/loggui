@@ -15,11 +15,11 @@ This is a roadmap of the project and what I plan to release in each stage
 
 ### Alpha
 
-- [ ] Create a web server to receive requests via gRPC
+- [ ] Create a web server to receive requests via HTTP
 - [ ] Create a client to send requests to the server. Start with the basics - HTTP status, Request Path, Time/Date
 - [ ] Add interface for context-specific logs, and an adapter for Zap
 - [ ] Create a basic UI with basic authentication and filters
+- [ ] Add support for PostgreSQL and SQLite
 
 ### 1.0
-
-- [ ] Add support for PostgreSQL and SQLite
+T.B.D.
