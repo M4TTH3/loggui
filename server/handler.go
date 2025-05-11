@@ -4,6 +4,8 @@ import "net/http"
 
 // mux is a wrapper implementation of ServeMux which allows for middleware
 // to be applied to each request.
+//
+// Implements http.Handler
 type mux struct {
 	*http.ServeMux
 	middlewares []middleware
