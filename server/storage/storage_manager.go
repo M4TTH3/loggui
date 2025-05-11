@@ -1,9 +1,14 @@
-package core
+package storage
 
 import (
 	"errors"
+	"fmt"
+	"github.com/m4tth3/loggui/core"
 	"sync"
+	"time"
 )
+
+type Log = core.Log
 
 const (
 	DEFAULT_RING_MAX_SIZE int = 10_000
@@ -57,9 +62,30 @@ type StorageManager[T any] interface {
 // LogStorageManager is the main storage manager for logs
 //
 // Implements StorageManager[*Log]
+// We can always assume that the buffer cache is always up to date,
+// and we can reference the database for historical logs
 type LogStorageManager struct {
-	size uint64 // Number of logs in total
+	size         uint64 // Number of logs in total
+	writeChannel chan *Log
 
+	buffer    Buffer[Log]
+	writeLock sync.Mutex
+}
+
+func NewLogStorageManager(size int) *LogStorageManager {
+	if size <= 0 {
+		size = DEFAULT_RING_MAX_SIZE
+	}
+
+	l := &LogStorageManager{
+		size:         uint64(size),
+		writeChannel: make(chan *Log, size),
+		buffer:       NewRingBuffer[Log](size),
+	}
+
+	go l.processWriteChannel()
+
+	return l
 }
 
 func (l *LogStorageManager) Read(num int, ctx *LogStorageContext, filter filter) error {
@@ -81,5 +107,19 @@ func (l *LogStorageManager) Write(log *Log) error {
 		return errors.New("log is nil")
 	}
 
+	l.writeLock.Lock()
+	defer l.writeLock.Unlock()
+
+	log.RecordedAt = time.Now()
+	l.writeChannel <- log
+
 	return nil
+}
+
+func (l *LogStorageManager) processWriteChannel() {
+	var log *Log
+	for {
+		log = <-l.writeChannel
+		fmt.Print(log)
+	}
 }

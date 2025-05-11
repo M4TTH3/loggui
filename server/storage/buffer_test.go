@@ -1,4 +1,4 @@
-package core
+package storage
 
 import (
 	"github.com/stretchr/testify/assert"
@@ -7,7 +7,7 @@ import (
 )
 
 func TestLogRingBuffer_Write(t *testing.T) {
-	buffer := NewLogRingBuffer(3)
+	buffer := NewRingBuffer[Log](3)
 
 	// Test Write with valid logs
 	logs := []*Log{
@@ -30,11 +30,10 @@ func TestLogRingBuffer_Write(t *testing.T) {
 	// Test Write with nil log
 	err := buffer.Write(nil)
 	assert.Error(t, err, "Expected an error when writing a nil log")
-	assert.Equal(t, "log cannot be nil", err.Error(), "Expected error message to be 'log cannot be nil'")
 }
 
 func TestLogRingBuffer_Get(t *testing.T) {
-	buffer := NewLogRingBuffer(3)
+	buffer := NewRingBuffer[Log](3)
 
 	// Write logs to the buffer
 	logs := []*Log{
@@ -65,7 +64,7 @@ func TestLogRingBuffer_Get(t *testing.T) {
 }
 
 func TestLogRingBuffer_Get_Overwritten(t *testing.T) {
-	buffer := NewLogRingBuffer(3)
+	buffer := NewRingBuffer[Log](3)
 	reader := buffer.NewReader()
 
 	// Attempt to read from an empty buffer
@@ -105,7 +104,7 @@ func TestLogRingBuffer_Get_Overwritten(t *testing.T) {
 }
 
 func TestLogRingBuffer_Concurrency(t *testing.T) {
-	buffer := NewLogRingBuffer(5)
+	buffer := NewRingBuffer[Log](5)
 	var wg sync.WaitGroup
 
 	// Concurrent writes
@@ -153,7 +152,7 @@ func TestLogRingBuffer_Concurrency(t *testing.T) {
 }
 
 func TestLogRingBuffer_NewReaderAndListener(t *testing.T) {
-	buffer := NewLogRingBuffer(3)
+	buffer := NewRingBuffer[Log](3)
 
 	// Write logs to the buffer
 	logs := []*Log{
