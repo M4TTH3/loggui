@@ -1,5 +1,7 @@
 package database
 
-type DatabaseDriver interface {
+// QueryHandler is an interface to abstract operations across
+// different databases.
+type QueryHandler interface {
 
 }

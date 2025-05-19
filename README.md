@@ -22,4 +22,6 @@ This is a roadmap of the project and what I plan to release in each stage
 - [ ] Add support for PostgreSQL and SQLite
 
 ### 1.0
+- [ ] Add more advanced key caching and searches
+- [ ] Add support for other databases
 T.B.D.
