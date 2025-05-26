@@ -7,7 +7,7 @@ import (
 )
 
 // Ring buffer is a thread-safe circular buffer that allows for efficient
-// reading and writing of data. It is a fixed-size buffer that offers
+// reading and writing of data. It is a fixed-capacity buffer that offers
 // fast Seek operations.
 //
 // For faster RW without O(1) seeking, use a fixed buffer.
@@ -15,6 +15,13 @@ import (
 const (
 	ListenerBufferSize = 100
 )
+
+// SafeElement is an interface that defines a cleanup method for elements
+// in the ring buffer. This is useful for elements that need to perform
+// cleanup operations when they are pushed out of the buffer.
+type SafeElement interface {
+	Cleanup()
+}
 
 type Element[T any] struct {
 	value *T
@@ -40,23 +47,30 @@ func (e *Element[T]) Next(offset uint) *Element[T] {
 		return nil
 	}
 
-	e.buffer.rw.RLock()
-	defer e.buffer.rw.RUnlock()
+	e.buffer.mutex.RLock()
+	defer e.buffer.mutex.RUnlock()
 
 	nextCounter := e.counter - uint64(offset)
-	itemPos := loopSubtract(e.pos, offset, e.buffer.Size())
+	itemPos := loopSubtract(e.pos, offset, e.buffer.Capacity())
 	item := e.buffer.data[itemPos]
 
-	if e.buffer.counter-nextCounter >= uint64(e.buffer.Size()) || item == nil {
-		return nil
-	}
-
-	return &Element[T]{
+	newEl := &Element[T]{
 		value:   item,
 		pos:     itemPos,
 		counter: nextCounter,
 		buffer:  e.buffer,
 	}
+
+	if !newEl.Valid() {
+		return nil
+	}
+
+	return newEl
+}
+
+// Valid checks if the element is valid (inside the buffer)
+func (e *Element[T]) Valid() bool {
+	return e != nil && e.value != nil && e.buffer.counter-e.counter < uint64(e.buffer.Capacity())
 }
 
 func newElement[T any](b *RingBuffer[T]) *Element[T] {
@@ -65,7 +79,7 @@ func newElement[T any](b *RingBuffer[T]) *Element[T] {
 		return nil
 	}
 
-	pos := loopSubtract(b.index, 1, b.Size())
+	pos := loopSubtract(b.index, 1, b.Capacity())
 
 	return &Element[T]{
 		value:   b.data[pos],
@@ -75,9 +89,14 @@ func newElement[T any](b *RingBuffer[T]) *Element[T] {
 	}
 }
 
+type listener[T any] struct {
+	c      chan<- *T
+	cancel context.CancelFunc
+}
+
 type RingBuffer[T any] struct {
-	data []*T
-	size uint
+	data     []*T
+	capacity uint
 
 	// Protected by RWMutex
 
@@ -90,15 +109,19 @@ type RingBuffer[T any] struct {
 	// listeners is a map of BufferListener to their channels
 	listeners sync.Map
 
-	rw sync.RWMutex
+	mutex sync.RWMutex
 }
 
 func NewRingBuffer[T any](size uint) *RingBuffer[T] {
+	if size == 0 {
+		panic("ring buffer size must be > 0")
+	}
+
 	return &RingBuffer[T]{
 		data:          make([]*T, size),
-		size:          size,
+		capacity:      size,
 		index:         0,
-		rw:            sync.RWMutex{},
+		mutex:         sync.RWMutex{},
 		counter:       0,
 		listeners:     sync.Map{},
 		prependBefore: size,
@@ -109,30 +132,35 @@ func (l *RingBuffer[T]) Index() uint {
 	return l.index
 }
 
-func (l *RingBuffer[T]) Size() uint {
-	return l.size
+func (l *RingBuffer[T]) Capacity() uint {
+	return l.capacity
 }
 
 func (l *RingBuffer[T]) Element() *Element[T] {
-	l.rw.RLock()
-	defer l.rw.RUnlock()
+	l.mutex.RLock()
+	defer l.mutex.RUnlock()
 
 	return newElement(l)
 }
 
-// ElementAndListener returns the current element and a buffered channel with the same size
+// ElementAndListener returns the current element and a buffered channel with the same capacity
 //
 // If the buffer is full and there is no active readers, it will be closed
 func (l *RingBuffer[T]) ElementAndListener(ctx context.Context) (*Element[T], <-chan *T) {
-	l.rw.RLock()
-	defer l.rw.RUnlock()
+	l.mutex.RLock()
+	defer l.mutex.RUnlock()
 
+	newCtx, cancel := context.WithCancel(ctx)
 	c := make(chan *T, ListenerBufferSize)
-	l.listeners.Store(c, (chan<- *T)(c))
+	l.listeners.Store(c, listener[T]{
+		c:      c,
+		cancel: cancel,
+	})
 
 	go func() {
-		<-ctx.Done()
+		<-newCtx.Done()
 		l.listeners.Delete(c)
+		close(c)
 	}()
 
 	return newElement(l), c
@@ -143,22 +171,27 @@ func (l *RingBuffer[T]) Write(item *T) {
 		panic("item cannot be nil")
 	}
 
-	l.rw.Lock()
-	defer l.rw.Unlock()
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+
+	prev := l.data[l.index]
+	if safeEl, ok := any(prev).(SafeElement); prev != nil && ok {
+		defer safeEl.Cleanup()
+	}
 
 	l.data[l.index] = item
-	l.index = loopAdd(l.index, 1, l.Size())
+	l.index = loopAdd(l.index, 1, l.Capacity())
 	l.counter++
 
 	l.listeners.Range(func(key, value any) bool {
-		if c, ok := value.(chan<- *T); ok {
+		if v, ok := value.(listener[T]); ok {
 			select {
-			case c <- item:
+			case v.c <- item:
 			default:
 				{
 					// Stopped listening and buffer is full
 					l.listeners.Delete(key)
-					close(c)
+					v.cancel()
 				}
 			}
 		} else {
@@ -176,8 +209,8 @@ func (l *RingBuffer[T]) WriteLastEmpty(item *T) bool {
 		return false
 	}
 
-	l.rw.Lock()
-	defer l.rw.Unlock()
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
 
 	l.prependBefore--
 
@@ -192,9 +225,9 @@ func (l *RingBuffer[T]) WriteLastEmpty(item *T) bool {
 }
 
 func loopAdd64(a, b, size uint64) uint64 {
-	bigA := big.NewInt(int64(a))
-	bigB := big.NewInt(int64(b))
-	bigSize := big.NewInt(int64(size))
+	bigA := big.NewInt(0).SetUint64(a)
+	bigB := big.NewInt(0).SetUint64(b)
+	bigSize := big.NewInt(0).SetUint64(size)
 
 	bigA = bigA.Add(bigA, bigB)
 

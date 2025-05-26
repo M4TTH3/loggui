@@ -4,26 +4,40 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/m4tth3/loggui/core"
+	"github.com/m4tth3/loggui/server/database"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-type logReader struct {
+type Log = core.Log
+type Chunk = uint64
+type Filter = database.Filter
+
+const (
+	CacheSize = 50
+)
+
+type filterCache struct {
+	filter *Filter
+	cache  *RingBuffer[Log]
+}
+
+type LogReader struct {
 	count   uint64
 	req     chan Chunk
 	filter  *Filter
-	reader  *RingBuffer[Log]
 	manager *LogManager
 
 	once atomic.Int32
 }
 
-func (s *logReader) Count() uint64 {
+func (s *LogReader) Count() uint64 {
 	return s.count
 }
 
-func (s *logReader) OpenStream(ctx context.Context) (<-chan *Log, error) {
+func (s *LogReader) OpenStream(ctx context.Context) (<-chan *Log, error) {
 	if !s.once.CompareAndSwap(0, 1) {
 		return nil, errors.New("stream already started")
 	}
@@ -48,16 +62,21 @@ func (s *logReader) OpenStream(ctx context.Context) (<-chan *Log, error) {
 	return out, nil
 }
 
-func (s *logReader) RequestChunk(chunk Chunk) error {
+func (s *LogReader) RequestChunk(chunk Chunk) {
 	if s.req == nil {
-		return errors.New("request channel is nil")
+		panic("request channel is nil")
 	}
 
 	s.req <- chunk
-	return nil
 }
 
-func (s *logReader) readChunk(chunk Chunk, filter *Filter, out chan<- *Log) bool {
+func (s *LogReader) readChunk(chunk Chunk, filter *Filter, out chan<- *Log) bool {
+	// First attempt to find the cache. Note cache should be small
+	for el := s.manager.caches.Element(); el != nil; el = el.Next(0) {
+		if filter.Equal(el.Value().filter) {
+
+		}
+	}
 
 	return true
 }
@@ -71,11 +90,12 @@ type LogManager struct {
 	size         uint64 // Number of logs in total
 	writeChannel chan *Log
 
+	caches    *RingBuffer[filterCache]
 	buffer    *RingBuffer[Log]
 	writeLock sync.Mutex
 }
 
-func NewLogManager(size uint) Manager[Log] {
+func NewLogManager(size uint) *LogManager {
 
 	l := &LogManager{
 		size:         uint64(size),
@@ -88,8 +108,8 @@ func NewLogManager(size uint) Manager[Log] {
 	return l
 }
 
-func (l *LogManager) GetReader() Reader[Log] {
-	return &logReader{}
+func (l *LogManager) GetReader() *LogReader {
+	return &LogReader{}
 }
 
 // Write writes the log to the storage. We will store based on date received

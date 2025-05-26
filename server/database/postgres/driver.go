@@ -10,8 +10,6 @@ type driver struct {
 	conn *pgx.Conn
 }
 
-
-
 func NewQueryHandler(url string) (d.QueryHandler, error) {
 	conn, err := pgx.Connect(context.Background(), url)
 	if err != nil {

@@ -47,8 +47,7 @@ type Log struct {
 
 	Message string `json:"message"`
 
-	// MessageJson is a map of kvp from Message if Message is a JSON object
-	MessageJson *map[string]any `json:"message_json"`
+	IsMessageJson bool `json:"is_message_json"`
 
 	RecordedAt time.Time `json:"recorded_at"`
 
